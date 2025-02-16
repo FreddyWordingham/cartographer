@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 ndarray = "0.16.1"
-ndarray_images = "0.1.0"
+photo = { path = "../photo" }
 rand = "0.9.0"
