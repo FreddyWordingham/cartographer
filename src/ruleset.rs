@@ -1,9 +1,10 @@
-use indexmap::IndexSet;
+use bit_vec::BitVec;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 
-#[derive(Debug, Serialize, Deserialize)]
+use crate::{Direction, Rule};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ruleset {
     pub rules: Vec<Rule>,
 }
@@ -11,48 +12,54 @@ pub struct Ruleset {
 impl Ruleset {
     /// Construct a new Ruleset from an example index map.
     pub fn new(map: &Array2<usize>) -> Self {
-        let max_index = map.iter().max().unwrap();
-        let mut rules: Vec<Rule> = vec![Rule::default(); max_index + 1];
+        let max_index = *map.iter().max().unwrap();
+        let num_tiles = max_index + 1;
+        let mut rules: Vec<Rule> = (0..num_tiles).map(|_| Rule::new(num_tiles)).collect();
 
         let (height, width) = map.dim();
-
-        // Iterate over map tiles and find valid indices for each side.
-        for (coord, &tile) in map.indexed_iter() {
-            if coord.0 > 0 {
-                rules[tile].north.insert(map[[coord.0 - 1, coord.1]]);
+        for ((i, j), &tile) in map.indexed_iter() {
+            if i > 0 {
+                let neighbor_tile = map[[i - 1, j]];
+                rules[tile].north.set(neighbor_tile, true);
             }
-            if coord.0 < height - 1 {
-                rules[tile].south.insert(map[[coord.0 + 1, coord.1]]);
+            if i < height - 1 {
+                let neighbor_tile = map[[i + 1, j]];
+                rules[tile].south.set(neighbor_tile, true);
             }
-            if coord.1 > 0 {
-                rules[tile].west.insert(map[[coord.0, coord.1 - 1]]);
+            if j > 0 {
+                let neighbor_tile = map[[i, j - 1]];
+                rules[tile].west.set(neighbor_tile, true);
             }
-            if coord.1 < width - 1 {
-                rules[tile].east.insert(map[[coord.0, coord.1 + 1]]);
+            if j < width - 1 {
+                let neighbor_tile = map[[i, j + 1]];
+                rules[tile].east.set(neighbor_tile, true);
             }
         }
-
         Self { rules }
     }
-}
 
-impl Ruleset {
     pub fn load(filepath: &str) -> Self {
-        let file = File::create(filepath).expect("Failed to create file");
-        serde_yaml::from_reader(file).expect("Failed to read rules")
+        let rules: Vec<Rule> = serde_yaml::from_str(&std::fs::read_to_string(filepath).unwrap())
+            .expect("Failed to load ruleset");
+        Self { rules }
     }
 
     pub fn save(&self, filepath: &str) {
-        let file = File::create(filepath).expect("Failed to create file");
-        serde_yaml::to_writer(file, self).expect("Failed to write rules");
+        let rules_str = serde_yaml::to_string(&self.rules).expect("Failed to serialize ruleset");
+        std::fs::write(filepath, rules_str).expect("Failed to save ruleset");
     }
-}
 
-/// The allowed indices for each side of a tile.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Rule {
-    pub north: IndexSet<usize>,
-    pub south: IndexSet<usize>,
-    pub west: IndexSet<usize>,
-    pub east: IndexSet<usize>,
+    // Return allowed mask for tile `p` in a given direction.
+    pub fn allowed_mask(&self, p: usize, direction: Direction) -> BitVec {
+        match direction {
+            Direction::North => self.rules[p].north.clone(),
+            Direction::South => self.rules[p].south.clone(),
+            Direction::East => self.rules[p].east.clone(),
+            Direction::West => self.rules[p].west.clone(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.rules.len()
+    }
 }
