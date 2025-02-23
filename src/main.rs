@@ -26,16 +26,16 @@ fn main() {
     let image_name = "tileset.png";
     let filepath = format!("{}/{}", INPUT_DIR, image_name);
     let image = ImageRGBA::<u8>::load(filepath).expect("Failed to load image");
-    println!("{}", image);
+    // println!("{}", image);
 
     let image_tiles = image.tiles(TILE_SIZE);
     let unique_tiles = image.unique_tiles(TILE_SIZE);
     print_images_with_captions(unique_tiles.as_slice(), 1);
 
-    let _tile_mapping = map_tiles(&image_tiles, &unique_tiles);
+    let tile_mapping = map_tiles(&image_tiles, &unique_tiles);
 
-    // let rules = generate_rules(&tile_mapping);
-    let rules = load_rules();
+    let rules = generate_rules(&tile_mapping);
+    // let rules = load_rules();
     let mut wave_function = WaveFunction::new(OUTPUT_MAP_SIZE, rules);
 
     let mut rng = rand::rng();
