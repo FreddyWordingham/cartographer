@@ -1,18 +1,22 @@
+use crossterm::event::{Event, KeyCode, KeyEvent, read};
 use indicatif::ProgressBar;
 use ndarray::{Array2, Array3, Axis, s};
 use photo::ImageRGBA;
-use rand::{
-    Rng, SeedableRng,
-    prelude::{IndexedRandom, SliceRandom},
+use rand::{SeedableRng, prelude::SliceRandom};
+use serde::{Deserialize, Serialize};
+use std::{
+    cmp::Reverse,
+    collections::BinaryHeap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
 };
-use std::path::PathBuf;
-
-const INPUT_DIR: &str = "input";
-const INPUT_IMAGE_FILENAME: &str = "tileset5.png";
 
 const TILE_RESOLUTION: [usize; 2] = [3, 3];
-const MAP_RESOLUTION: [usize; 2] = [20, 20];
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Rule {
     north: Vec<usize>,
     east: Vec<usize>,
@@ -20,6 +24,7 @@ struct Rule {
     west: Vec<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RuleSet {
     rules: Vec<Rule>,
 }
@@ -49,10 +54,9 @@ impl WaveFunction {
 
     #[allow(dead_code)]
     fn entropy_map(&self) -> Array2<f64> {
-        self.count_map().mapv(|v| (v as f64).ln() as f64)
+        self.count_map().mapv(|v| (v as f64).ln())
     }
 
-    // Propagate constraints starting from the initial changed positions.
     fn propagate(&mut self, rules: &RuleSet, mut stack: Vec<(usize, usize)>) -> bool {
         let (rows, cols) = self.possibilities.dim();
         while let Some((ci, cj)) = stack.pop() {
@@ -61,10 +65,10 @@ impl WaveFunction {
             }
             let t = self.possibilities[[ci, cj]][0];
             let neighbors = [
-                (ci.wrapping_sub(1), cj, &rules.rules[t].north), // North
-                (ci, cj + 1, &rules.rules[t].east),              // East
-                (ci + 1, cj, &rules.rules[t].south),             // South
-                (ci, cj.wrapping_sub(1), &rules.rules[t].west),  // West
+                (ci.wrapping_sub(1), cj, &rules.rules[t].north),
+                (ci, cj + 1, &rules.rules[t].east),
+                (ci + 1, cj, &rules.rules[t].south),
+                (ci, cj.wrapping_sub(1), &rules.rules[t].west),
             ];
             for &(ni, nj, allowed) in &neighbors {
                 if ni >= rows || nj >= cols {
@@ -88,61 +92,98 @@ impl WaveFunction {
         self.possibilities.iter().filter(|v| v.len() == 1).count() as u64
     }
 
-    fn backtracking_collapse<R: Rng>(
+    /// Modified collapse function using the priority queue.
+    fn backtracking_collapse<R: rand::Rng>(
         &mut self,
         rules: &RuleSet,
         rng: &mut R,
-        progress: &ProgressBar,
-    ) -> Option<Array2<usize>> {
-        // Update progress based on current collapsed count.
+        progress: &indicatif::ProgressBar,
+        cancel_flag: &std::sync::atomic::AtomicBool,
+    ) -> Option<ndarray::Array2<usize>> {
+        if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
         progress.set_position(self.count_collapsed());
 
         if self.possibilities.iter().all(|v| v.len() == 1) {
             return Some(self.possibilities.mapv(|v| v[0]));
         }
 
-        let (rows, cols) = self.possibilities.dim();
-        let mut min_entropy = usize::MAX;
-        let mut min_positions = Vec::new();
-        for i in 0..rows {
-            for j in 0..cols {
-                let len = self.possibilities[[i, j]].len();
-                if len > 1 {
-                    if len < min_entropy {
-                        min_entropy = len;
-                        min_positions.clear();
-                        min_positions.push((i, j));
-                    } else if len == min_entropy {
-                        min_positions.push((i, j));
+        if let Some((i, j)) = self.choose_min_entropy_cell() {
+            let mut candidates = self.possibilities[[i, j]].clone();
+            candidates.shuffle(rng);
+            for candidate in candidates {
+                let backup = self.possibilities.clone();
+                self.possibilities[[i, j]] = vec![candidate];
+                progress.set_position(self.count_collapsed());
+                if self.propagate(rules, vec![(i, j)]) {
+                    if let Some(solution) =
+                        self.backtracking_collapse(rules, rng, progress, cancel_flag)
+                    {
+                        return Some(solution);
                     }
                 }
-            }
-        }
-
-        let &(i, j) = min_positions.choose(rng).unwrap();
-        let mut candidates = self.possibilities[[i, j]].clone();
-        candidates.shuffle(rng);
-
-        for candidate in candidates {
-            // Backup current state.
-            let backup = self.possibilities.clone();
-            self.possibilities[[i, j]] = vec![candidate];
-            progress.set_position(self.count_collapsed());
-            if self.propagate(rules, vec![(i, j)]) {
-                if let Some(solution) = self.backtracking_collapse(rules, rng, progress) {
-                    return Some(solution);
+                self.possibilities = backup;
+                progress.set_position(self.count_collapsed());
+                if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    return None;
                 }
             }
-            // Restore state (backtracking decreases the progress).
-            self.possibilities = backup;
-            progress.set_position(self.count_collapsed());
         }
         None
+    }
+
+    /// Returns the coordinates of the cell with minimum entropy (>1 possibility).
+    fn choose_min_entropy_cell(&self) -> Option<(usize, usize)> {
+        let (rows, cols) = self.possibilities.dim();
+        let mut heap = BinaryHeap::new();
+        for i in 0..rows {
+            for j in 0..cols {
+                let count = self.possibilities[[i, j]].len();
+                if count > 1 {
+                    heap.push(Reverse((count, i, j)));
+                }
+            }
+        }
+        heap.pop().map(|Reverse((_count, i, j))| (i, j))
     }
 }
 
 fn main() {
-    let input_image_filepath = PathBuf::from(INPUT_DIR).join(INPUT_IMAGE_FILENAME);
+    // Read command line arguments.
+    let args: Vec<String> = std::env::args().collect();
+    println!("{:?}", args.len());
+    if args.len() != 3 {
+        eprintln!("Usage: {} <input_image> <output_resolution>", args[0]);
+        std::process::exit(1);
+    }
+    let input_image_filepath = &args[1];
+    let map_resolution = {
+        /// In the form "widthxheight".
+        let s = &args[2];
+        let mut parts = s.split('x');
+        let width = parts.next().unwrap().parse::<usize>().unwrap();
+        let height = parts.next().unwrap().parse::<usize>().unwrap();
+        [height, width]
+    };
+
+    // Spawn a thread to listen for the spacebar.
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let cancel_flag = cancel_flag.clone();
+        thread::spawn(move || {
+            loop {
+                if let Event::Key(KeyEvent {
+                    code: KeyCode::Char(' '),
+                    ..
+                }) = read().unwrap()
+                {
+                    cancel_flag.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+    }
+
     let input_image =
         ImageRGBA::<u8>::load(input_image_filepath).expect("Failed to load input image");
     println!("{}", input_image);
@@ -154,29 +195,33 @@ fn main() {
     }
 
     let rules = create_rules(&tiles);
-    for (n, rule) in rules.rules.iter().enumerate() {
-        println!("Rule {}:", n);
-        println!("  North: {:?}", rule.north);
-        println!("  East: {:?}", rule.east);
-        println!("  South: {:?}", rule.south);
-        println!("  West: {:?}", rule.west);
-    }
+    // Write rules to a file.
+    let rules_json = serde_yaml::to_string(&rules).unwrap();
+    std::fs::write("output/rules.yaml", rules_json).unwrap();
 
     let punched_tiles = punch_tiles(tiles);
     for seed in 0..100 {
+        println!("---\n\n\nSeed: {}", seed);
+        // Reset cancellation for each seed.
+        cancel_flag.store(false, Ordering::SeqCst);
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        let mut wave_function = WaveFunction::new(MAP_RESOLUTION, rules.len());
-        let progress = ProgressBar::new((MAP_RESOLUTION[0] * MAP_RESOLUTION[1]) as u64);
-        if let Some(map) = wave_function.backtracking_collapse(&rules, &mut rng, &progress) {
-            let mut output = Array3::zeros([MAP_RESOLUTION[0], MAP_RESOLUTION[1], 4]);
+        let mut wave_function = WaveFunction::new(map_resolution, rules.len());
+        let progress = ProgressBar::new((map_resolution[0] * map_resolution[1]) as u64);
+        if let Some(map) =
+            wave_function.backtracking_collapse(&rules, &mut rng, &progress, &cancel_flag)
+        {
+            let mut output = Array3::zeros([map_resolution[0], map_resolution[1], 4]);
             fill_output(&mut output, &map, &punched_tiles);
             let output_image = ImageRGBA::new(output);
+            progress.finish();
             println!("{}", output_image);
             output_image
                 .save(&format!("output/output_{:03}.png", seed))
                 .unwrap();
+        } else {
+            progress.finish();
+            println!("Seed {} cancelled.", seed);
         }
-        progress.finish();
     }
 }
 
@@ -191,47 +236,36 @@ fn fill_output(output: &mut Array3<u8>, map: &Array2<usize>, punched_tiles: &Vec
     }
 }
 
-/// Slide window over input image to collect all possible tiles.
 fn collect_tiles(image: &ImageRGBA<u8>, tile_resolution: [usize; 2]) -> Vec<ImageRGBA<u8>> {
     let mut tiles = Vec::with_capacity(
         (image.height() - tile_resolution[0] + 1) * (image.width() - tile_resolution[1] + 1),
     );
-
     for tile in image
         .data
         .windows([tile_resolution[0], tile_resolution[1], 4])
     {
-        let tile = ImageRGBA::new(tile.to_owned());
-        tiles.push(tile);
+        tiles.push(ImageRGBA::new(tile.to_owned()));
     }
-
     tiles
 }
 
-/// Remove duplicate tiles from the list.
 fn remove_duplicates(tiles: Vec<ImageRGBA<u8>>) -> Vec<ImageRGBA<u8>> {
     let mut unique_tiles = Vec::with_capacity(tiles.len());
     let mut unique_tiles_set = std::collections::HashSet::new();
-
     for tile in tiles {
         if unique_tiles_set.insert(tile.data.clone()) {
             unique_tiles.push(tile);
         }
     }
-
     unique_tiles
 }
 
-/// Punch tiles to remove the edges of the tile.
 #[allow(dead_code)]
 fn punch_tiles(tiles: Vec<ImageRGBA<u8>>) -> Vec<ImageRGBA<u8>> {
-    let mut punched_tiles = Vec::with_capacity(tiles.len());
-
-    for tile in tiles {
-        punched_tiles.push(ImageRGBA::new(extract_center(&tile.data, 1)));
-    }
-
-    punched_tiles
+    tiles
+        .into_iter()
+        .map(|tile| ImageRGBA::new(extract_center(&tile.data, 1)))
+        .collect()
 }
 
 fn extract_center(image: &Array3<u8>, border: usize) -> Array3<u8> {
@@ -243,7 +277,6 @@ fn extract_center(image: &Array3<u8>, border: usize) -> Array3<u8> {
 
 fn create_rules(tiles: &[ImageRGBA<u8>]) -> RuleSet {
     let mut rules = Vec::with_capacity(tiles.len());
-
     for q_tile in tiles {
         let mut rule = Rule {
             north: vec![],
@@ -267,12 +300,10 @@ fn create_rules(tiles: &[ImageRGBA<u8>]) -> RuleSet {
         }
         rules.push(rule);
     }
-
     RuleSet { rules }
 }
 
 fn check_east(centre_tile: &ImageRGBA<u8>, right_tile: &ImageRGBA<u8>) -> bool {
-    debug_assert!(centre_tile.data.dim() == right_tile.data.dim());
     let width = centre_tile.width();
     let centre = centre_tile.data.slice(s![.., 1..width, ..]);
     let right = right_tile.data.slice(s![.., 0..width - 1, ..]);
@@ -280,7 +311,6 @@ fn check_east(centre_tile: &ImageRGBA<u8>, right_tile: &ImageRGBA<u8>) -> bool {
 }
 
 fn check_west(centre_tile: &ImageRGBA<u8>, left_tile: &ImageRGBA<u8>) -> bool {
-    debug_assert!(centre_tile.data.dim() == left_tile.data.dim());
     let width = centre_tile.width();
     let centre = centre_tile.data.slice(s![.., 0..width - 1, ..]);
     let left = left_tile.data.slice(s![.., 1..width, ..]);
@@ -288,7 +318,6 @@ fn check_west(centre_tile: &ImageRGBA<u8>, left_tile: &ImageRGBA<u8>) -> bool {
 }
 
 fn check_north(centre_tile: &ImageRGBA<u8>, top_tile: &ImageRGBA<u8>) -> bool {
-    debug_assert!(centre_tile.data.dim() == top_tile.data.dim());
     let height = centre_tile.height();
     let centre = centre_tile.data.slice(s![0..(height - 1), .., ..]);
     let top = top_tile.data.slice(s![1..height, .., ..]);
@@ -296,7 +325,6 @@ fn check_north(centre_tile: &ImageRGBA<u8>, top_tile: &ImageRGBA<u8>) -> bool {
 }
 
 fn check_south(centre_tile: &ImageRGBA<u8>, bottom_tile: &ImageRGBA<u8>) -> bool {
-    debug_assert!(centre_tile.data.dim() == bottom_tile.data.dim());
     let height = centre_tile.height();
     let centre = centre_tile.data.slice(s![1..height, .., ..]);
     let bottom = bottom_tile.data.slice(s![0..(height - 1), .., ..]);
