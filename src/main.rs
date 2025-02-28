@@ -1,3 +1,4 @@
+use indicatif::ProgressBar;
 use ndarray::{Array2, Array3, Axis, s};
 use photo::ImageRGBA;
 use rand::{
@@ -7,7 +8,7 @@ use rand::{
 use std::path::PathBuf;
 
 const INPUT_DIR: &str = "input";
-const INPUT_IMAGE_FILENAME: &str = "tileset.png";
+const INPUT_IMAGE_FILENAME: &str = "tileset5.png";
 
 const TILE_RESOLUTION: [usize; 2] = [3, 3];
 const MAP_RESOLUTION: [usize; 2] = [20, 20];
@@ -83,19 +84,24 @@ impl WaveFunction {
         true
     }
 
-    // Backtracking collapse method.
+    fn count_collapsed(&self) -> u64 {
+        self.possibilities.iter().filter(|v| v.len() == 1).count() as u64
+    }
+
     fn backtracking_collapse<R: Rng>(
         &mut self,
         rules: &RuleSet,
         rng: &mut R,
+        progress: &ProgressBar,
     ) -> Option<Array2<usize>> {
-        // Fully collapsed: return the solution.
+        // Update progress based on current collapsed count.
+        progress.set_position(self.count_collapsed());
+
         if self.possibilities.iter().all(|v| v.len() == 1) {
             return Some(self.possibilities.mapv(|v| v[0]));
         }
 
         let (rows, cols) = self.possibilities.dim();
-        // Find all cells with the lowest entropy (>1 possibility).
         let mut min_entropy = usize::MAX;
         let mut min_positions = Vec::new();
         for i in 0..rows {
@@ -113,23 +119,23 @@ impl WaveFunction {
             }
         }
 
-        // Randomly select one of the lowest entropy cells.
         let &(i, j) = min_positions.choose(rng).unwrap();
         let mut candidates = self.possibilities[[i, j]].clone();
-        // Shuffle candidates for additional stochasticity.
         candidates.shuffle(rng);
 
         for candidate in candidates {
             // Backup current state.
             let backup = self.possibilities.clone();
             self.possibilities[[i, j]] = vec![candidate];
+            progress.set_position(self.count_collapsed());
             if self.propagate(rules, vec![(i, j)]) {
-                if let Some(solution) = self.backtracking_collapse(rules, rng) {
+                if let Some(solution) = self.backtracking_collapse(rules, rng, progress) {
                     return Some(solution);
                 }
             }
-            // Restore state on contradiction.
+            // Restore state (backtracking decreases the progress).
             self.possibilities = backup;
+            progress.set_position(self.count_collapsed());
         }
         None
     }
@@ -160,7 +166,8 @@ fn main() {
     for seed in 0..100 {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         let mut wave_function = WaveFunction::new(MAP_RESOLUTION, rules.len());
-        if let Some(map) = wave_function.backtracking_collapse(&rules, &mut rng) {
+        let progress = ProgressBar::new((MAP_RESOLUTION[0] * MAP_RESOLUTION[1]) as u64);
+        if let Some(map) = wave_function.backtracking_collapse(&rules, &mut rng, &progress) {
             let mut output = Array3::zeros([MAP_RESOLUTION[0], MAP_RESOLUTION[1], 4]);
             fill_output(&mut output, &map, &punched_tiles);
             let output_image = ImageRGBA::new(output);
@@ -169,6 +176,7 @@ fn main() {
                 .save(&format!("output/output_{:03}.png", seed))
                 .unwrap();
         }
+        progress.finish();
     }
 }
 
