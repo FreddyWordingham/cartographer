@@ -1,13 +1,16 @@
-use ndarray::{Array2, Array3, ArrayView1, ArrayViewMut1, s};
+use ndarray::{Array2, Array3, Axis, s};
 use photo::ImageRGBA;
-use rand::Rng;
+use rand::{
+    Rng, SeedableRng,
+    prelude::{IndexedRandom, SliceRandom},
+};
 use std::path::PathBuf;
 
 const INPUT_DIR: &str = "input";
-const INPUT_IMAGE_FILENAME: &str = "tileset2.png";
+const INPUT_IMAGE_FILENAME: &str = "tileset.png";
 
 const TILE_RESOLUTION: [usize; 2] = [3, 3];
-const MAP_RESOLUTION: [usize; 2] = [5, 5];
+const MAP_RESOLUTION: [usize; 2] = [20, 20];
 
 struct Rule {
     north: Vec<usize>,
@@ -31,119 +34,108 @@ struct WaveFunction {
 }
 
 impl WaveFunction {
-    fn new(resolution: [usize; 2], rules: &RuleSet) -> Self {
-        let mut wave_function = Self::new_empty(resolution, rules.len());
-        // wave_function.collapse();
-        wave_function
-    }
-
-    fn new_empty(resolution: [usize; 2], num_rules: usize) -> Self {
+    fn new(resolution: [usize; 2], num_rules: usize) -> Self {
         let p: Vec<_> = (0..num_rules).collect();
         Self {
             possibilities: Array2::from_elem(resolution, p.clone()),
         }
     }
 
+    #[allow(dead_code)]
     fn count_map(&self) -> Array2<usize> {
         self.possibilities.mapv(|v| v.len())
     }
 
-    fn collapse_cell_probabilities(&mut self, coord: [usize; 2], rules: &RuleSet) {
-        let (row, col) = (coord[0], coord[1]);
-        let (height, width) = self.possibilities.dim();
+    #[allow(dead_code)]
+    fn entropy_map(&self) -> Array2<f64> {
+        self.count_map().mapv(|v| (v as f64).ln() as f64)
+    }
 
-        // Retain only those rule indices that have valid neighbors
-        self.possibilities[[row, col]].retain(|&rule_idx| {
-            let rule = &rules.rules[rule_idx];
-
-            // Check north neighbor if exists
-            if row > 0 {
-                let neighbor = &self.possibilities[[row - 1, col]];
-                if !rule
-                    .north
-                    .iter()
-                    .any(|&allowed| neighbor.contains(&allowed))
-                {
-                    return false;
+    // Propagate constraints starting from the initial changed positions.
+    fn propagate(&mut self, rules: &RuleSet, mut stack: Vec<(usize, usize)>) -> bool {
+        let (rows, cols) = self.possibilities.dim();
+        while let Some((ci, cj)) = stack.pop() {
+            if self.possibilities[[ci, cj]].len() != 1 {
+                continue;
+            }
+            let t = self.possibilities[[ci, cj]][0];
+            let neighbors = [
+                (ci.wrapping_sub(1), cj, &rules.rules[t].north), // North
+                (ci, cj + 1, &rules.rules[t].east),              // East
+                (ci + 1, cj, &rules.rules[t].south),             // South
+                (ci, cj.wrapping_sub(1), &rules.rules[t].west),  // West
+            ];
+            for &(ni, nj, allowed) in &neighbors {
+                if ni >= rows || nj >= cols {
+                    continue;
+                }
+                let neighbor = &mut self.possibilities[[ni, nj]];
+                let before = neighbor.len();
+                neighbor.retain(|&candidate| allowed.contains(&candidate));
+                if neighbor.is_empty() {
+                    return false; // Contradiction
+                }
+                if neighbor.len() < before && neighbor.len() == 1 {
+                    stack.push((ni, nj));
                 }
             }
+        }
+        true
+    }
 
-            // Check east neighbor if exists
-            if col + 1 < width {
-                let neighbor = &self.possibilities[[row, col + 1]];
-                if !rule.east.iter().any(|&allowed| neighbor.contains(&allowed)) {
-                    return false;
-                }
-            }
+    // Backtracking collapse method.
+    fn backtracking_collapse<R: Rng>(
+        &mut self,
+        rules: &RuleSet,
+        rng: &mut R,
+    ) -> Option<Array2<usize>> {
+        // Fully collapsed: return the solution.
+        if self.possibilities.iter().all(|v| v.len() == 1) {
+            return Some(self.possibilities.mapv(|v| v[0]));
+        }
 
-            // Check south neighbor if exists
-            if row + 1 < height {
-                let neighbor = &self.possibilities[[row + 1, col]];
-                if !rule
-                    .south
-                    .iter()
-                    .any(|&allowed| neighbor.contains(&allowed))
-                {
-                    return false;
-                }
-            }
-
-            // Check west neighbor if exists
-            if col > 0 {
-                let neighbor = &self.possibilities[[row, col - 1]];
-                if !rule.west.iter().any(|&allowed| neighbor.contains(&allowed)) {
-                    return false;
-                }
-            }
-            true
-        });
-
-        fn collapse_cell(&mut self, coord: [usize; 2], rules: &RuleSet) {
-            let (row, col) = (coord[0], coord[1]);
-            // If not yet collapsed, pick one possibility (could use randomness)
-            if self.possibilities[[row, col]].len() > 1 {
-                let chosen = self.possibilities[[row, col]][0];
-                self.possibilities[[row, col]] = vec![chosen];
-            }
-
-            let (height, width) = self.possibilities.dim();
-            let mut stack = vec![coord];
-
-            // Propagate changes recursively using a stack
-            while let Some([r, c]) = stack.pop() {
-                // For each neighboring cell, update its possibilities
-                let neighbors = [
-                    if r > 0 { Some([r - 1, c]) } else { None },
-                    if r + 1 < height {
-                        Some([r + 1, c])
-                    } else {
-                        None
-                    },
-                    if c > 0 { Some([r, c - 1]) } else { None },
-                    if c + 1 < width {
-                        Some([r, c + 1])
-                    } else {
-                        None
-                    },
-                ];
-
-                for neighbor in neighbors.iter().flatten() {
-                    let (nr, nc) = (neighbor[0], neighbor[1]);
-                    let prev_count = self.possibilities[[nr, nc]].len();
-                    self.collapse_cell_probabilities(*neighbor, rules);
-                    let new_count = self.possibilities[[nr, nc]].len();
-                    if new_count != prev_count {
-                        stack.push(*neighbor);
+        let (rows, cols) = self.possibilities.dim();
+        // Find all cells with the lowest entropy (>1 possibility).
+        let mut min_entropy = usize::MAX;
+        let mut min_positions = Vec::new();
+        for i in 0..rows {
+            for j in 0..cols {
+                let len = self.possibilities[[i, j]].len();
+                if len > 1 {
+                    if len < min_entropy {
+                        min_entropy = len;
+                        min_positions.clear();
+                        min_positions.push((i, j));
+                    } else if len == min_entropy {
+                        min_positions.push((i, j));
                     }
                 }
             }
         }
+
+        // Randomly select one of the lowest entropy cells.
+        let &(i, j) = min_positions.choose(rng).unwrap();
+        let mut candidates = self.possibilities[[i, j]].clone();
+        // Shuffle candidates for additional stochasticity.
+        candidates.shuffle(rng);
+
+        for candidate in candidates {
+            // Backup current state.
+            let backup = self.possibilities.clone();
+            self.possibilities[[i, j]] = vec![candidate];
+            if self.propagate(rules, vec![(i, j)]) {
+                if let Some(solution) = self.backtracking_collapse(rules, rng) {
+                    return Some(solution);
+                }
+            }
+            // Restore state on contradiction.
+            self.possibilities = backup;
+        }
+        None
     }
 }
 
 fn main() {
-    println!("Hello, world!");
-
     let input_image_filepath = PathBuf::from(INPUT_DIR).join(INPUT_IMAGE_FILENAME);
     let input_image =
         ImageRGBA::<u8>::load(input_image_filepath).expect("Failed to load input image");
@@ -164,10 +156,31 @@ fn main() {
         println!("  West: {:?}", rule.west);
     }
 
-    let wave_function = WaveFunction::new(MAP_RESOLUTION, &rules);
-    // let mut rng = rand::rng();
-    let map = wave_function.count_map();
-    println!("{:?}", map);
+    let punched_tiles = punch_tiles(tiles);
+    for seed in 0..100 {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut wave_function = WaveFunction::new(MAP_RESOLUTION, rules.len());
+        if let Some(map) = wave_function.backtracking_collapse(&rules, &mut rng) {
+            let mut output = Array3::zeros([MAP_RESOLUTION[0], MAP_RESOLUTION[1], 4]);
+            fill_output(&mut output, &map, &punched_tiles);
+            let output_image = ImageRGBA::new(output);
+            println!("{}", output_image);
+            output_image
+                .save(&format!("output/output_{:03}.png", seed))
+                .unwrap();
+        }
+    }
+}
+
+fn fill_output(output: &mut Array3<u8>, map: &Array2<usize>, punched_tiles: &Vec<ImageRGBA<u8>>) {
+    for ((i, j), &tile_index) in map.indexed_iter() {
+        let tile_data = &punched_tiles[tile_index].data;
+        let tile_slice = tile_data
+            .index_axis(Axis(0), 0)
+            .index_axis(Axis(0), 0)
+            .to_owned();
+        output.slice_mut(s![i, j, ..]).assign(&tile_slice);
+    }
 }
 
 /// Slide window over input image to collect all possible tiles.
