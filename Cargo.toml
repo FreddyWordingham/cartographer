@@ -1,15 +1,14 @@
 [package]
-name = "wave-function-collapse"
+name = "cartographer"
 version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-bit-vec = "0.8.0"
-bitvec = "1.0.1"
 crossterm = "0.28.1"
 indicatif = "0.17.11"
 ndarray = "0.16.1"
-photo = { path = "../photo" }
+photo = "2.3.1"
 rand = "0.9.0"
-serde = { version = "1.0.218", features = ["derive"] }
+serde = "1.0.218"
 serde_yaml = "0.9.34"
+varisat = "0.2.2"
