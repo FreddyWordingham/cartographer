@@ -1,4 +1,4 @@
-use ndarray::ArrayView3;
+use ndarray::{ArrayView3, s};
 use photo::{ALL_TRANSFORMATIONS, ImageRGBA, Transformation};
 use std::collections::HashSet;
 

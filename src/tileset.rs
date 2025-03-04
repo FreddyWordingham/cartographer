@@ -1,4 +1,3 @@
-use ndarray::s;
 use photo::ImageRGBA;
 
 use crate::Tile;
@@ -51,30 +50,30 @@ impl TileSet {
     }
 }
 
-fn check_east(centre_tile: &ImageRGBA<u8>, right_tile: &ImageRGBA<u8>) -> bool {
-    let width = centre_tile.width();
-    let centre = centre_tile.data.slice(s![.., 1..width, ..]);
-    let right = right_tile.data.slice(s![.., 0..width - 1, ..]);
+fn check_east(centre_image: &ImageRGBA<u8>, right_image: &ImageRGBA<u8>) -> bool {
+    let width = centre_image.width();
+    let centre = centre_image.data.slice(s![.., 1..width, ..]);
+    let right = right_image.data.slice(s![.., 0..width - 1, ..]);
     centre == right
 }
 
-fn check_west(centre_tile: &ImageRGBA<u8>, left_tile: &ImageRGBA<u8>) -> bool {
-    let width = centre_tile.width();
-    let centre = centre_tile.data.slice(s![.., 0..width - 1, ..]);
-    let left = left_tile.data.slice(s![.., 1..width, ..]);
+fn check_west(centre_image: &ImageRGBA<u8>, left_image: &ImageRGBA<u8>) -> bool {
+    let width = centre_image.width();
+    let centre = centre_image.data.slice(s![.., 0..width - 1, ..]);
+    let left = left_image.data.slice(s![.., 1..width, ..]);
     centre == left
 }
 
-fn check_north(centre_tile: &ImageRGBA<u8>, top_tile: &ImageRGBA<u8>) -> bool {
-    let height = centre_tile.height();
-    let centre = centre_tile.data.slice(s![0..(height - 1), .., ..]);
-    let top = top_tile.data.slice(s![1..height, .., ..]);
+fn check_north(centre_image: &ImageRGBA<u8>, top_image: &ImageRGBA<u8>) -> bool {
+    let height = centre_image.height();
+    let centre = centre_image.data.slice(s![0..(height - 1), .., ..]);
+    let top = top_image.data.slice(s![1..height, .., ..]);
     centre == top
 }
 
-fn check_south(centre_tile: &ImageRGBA<u8>, bottom_tile: &ImageRGBA<u8>) -> bool {
-    let height = centre_tile.height();
-    let centre = centre_tile.data.slice(s![1..height, .., ..]);
-    let bottom = bottom_tile.data.slice(s![0..(height - 1), .., ..]);
+fn check_south(centre_image: &ImageRGBA<u8>, bottom_image: &ImageRGBA<u8>) -> bool {
+    let height = centre_image.height();
+    let centre = centre_image.data.slice(s![1..height, .., ..]);
+    let bottom = bottom_image.data.slice(s![0..(height - 1), .., ..]);
     centre == bottom
 }
