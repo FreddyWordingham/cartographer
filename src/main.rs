@@ -1,4 +1,4 @@
-use cartographer::Tiles;
+use cartographer::TileSet;
 use photo::ImageRGBA;
 
 const TILE_SIZE: [usize; 2] = [3, 3];
@@ -31,6 +31,15 @@ fn main() {
         ImageRGBA::<u8>::load(example_image_filepath).expect("Failed to load example map image.");
     println!("{}", example_map);
 
-    let mut tiles = Tiles::new(TILE_SIZE);
-    tiles.ingest(&example_map);
+    let mut tileset = TileSet::new(TILE_SIZE);
+    tileset.ingest(&example_map);
+    for (n, (tile, count)) in tileset.tile_counts.iter().enumerate() {
+        println!(
+            "Tile {} count {} transformations {}:\n{}",
+            n,
+            count,
+            tile.transformations.len(),
+            tile.image
+        );
+    }
 }
