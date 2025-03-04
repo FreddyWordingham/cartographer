@@ -33,11 +33,11 @@ fn main() {
 
     let mut tileset = TileSet::new(TILE_SIZE);
     tileset.ingest(&example_map);
-    for (n, (tile, count)) in tileset.tile_counts.iter().enumerate() {
+    for (n, tile) in tileset.tiles.iter().enumerate() {
         println!(
-            "Tile {} count {} transformations {}:\n{}",
+            "Tile {} frequency {} transformations {}:\n{}",
             n,
-            count,
+            tile.frequency,
             tile.transformations.len(),
             tile.image
         );

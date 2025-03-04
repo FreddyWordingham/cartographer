@@ -5,7 +5,7 @@ use crate::Tile;
 
 pub struct TileSet {
     pub tile_size: [usize; 2],
-    pub tile_counts: Vec<(Tile, usize)>,
+    pub tiles: Vec<Tile>,
 }
 
 impl TileSet {
@@ -15,7 +15,7 @@ impl TileSet {
 
         TileSet {
             tile_size,
-            tile_counts: Vec::new(),
+            tiles: Vec::new(),
         }
     }
 
@@ -35,17 +35,17 @@ impl TileSet {
         // Iterate over all possible tile windows in the map image
         for tile_view in map.data.windows([self.tile_size[0], self.tile_size[1], 4]) {
             let mut found = false;
-            for (existing_tile, count) in &mut self.tile_counts {
-                if let Some(trans) = existing_tile.equal_under_transformation(&tile_view) {
-                    existing_tile.add_transformation(trans);
-                    *count += 1;
+            for tile in &mut self.tiles {
+                if let Some(trans) = tile.equal_under_transformation(&tile_view) {
+                    tile.add_transformation(trans);
+                    tile.frequency += 1;
                     found = true;
                     break;
                 }
             }
             if !found {
                 let tile_image = ImageRGBA::new(tile_view.to_owned());
-                self.tile_counts.push((Tile::new(tile_image), 1));
+                self.tiles.push(Tile::new(tile_image, 1));
             }
         }
     }

@@ -5,16 +5,22 @@ use std::collections::HashSet;
 pub struct Tile {
     pub image: ImageRGBA<u8>,
     pub transformations: HashSet<Transformation>,
+    pub frequency: usize,
 }
 
 impl Tile {
-    pub fn new(image: ImageRGBA<u8>) -> Self {
+    pub fn new(image: ImageRGBA<u8>, frequency: usize) -> Self {
+        debug_assert!(image.width() > 0);
+        debug_assert!(image.height() > 0);
+        debug_assert!(frequency > 0);
+
         let mut transformations = HashSet::new();
         transformations.insert(Transformation::Identity);
 
         Tile {
             image,
             transformations,
+            frequency,
         }
     }
 

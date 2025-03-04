@@ -1,12 +1,5 @@
 use std::{collections::HashMap, fmt};
 
-/// Represents a unique tile orientation state.
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-struct TileState {
-    tile_id: u32,    // Base tile identifier
-    orientation: u8, // Orientation index (e.g., 0=0°, 1=90°, 2=180°, 3=270°, etc.)
-}
-
 /// Cardinal directions for adjacency (could be extended for 3D or hex grids).
 #[derive(Debug, Copy, Clone)]
 enum Direction {
@@ -16,6 +9,13 @@ enum Direction {
     West,
 }
 const NUM_DIRS: usize = 4;
+
+/// Represents a unique tile orientation state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+struct TileState {
+    tile_id: u32,    // Tile index
+    orientation: u8, // Orientation index
+}
 
 pub struct RuleSet {
     /// Total number of distinct tile states (each tile orientation counted separately).
