@@ -60,27 +60,60 @@ impl<'a> WaveFunction<'a> {
         let mut states =
             Array2::from_shape_fn((rows, cols), |_| BitVec::repeat(true, tile_set.tiles.len()));
 
+        // Predefine neighbor offsets for a 3x3 block.
+        const NEIGHBORS: [(isize, isize); 9] = [
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 0),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ];
+
         for i in 0..rows {
             for j in 0..cols {
-                let init_col = init_image.data.slice(s![i, j, ..]);
-                if Self::is_wildcard(init_col, wildcard_colors) {
+                // Get the init image center pixel as a slice.
+                let init_center = init_image.data.slice(s![i, j, ..]);
+                if Self::is_wildcard(init_center.as_slice().unwrap().into(), wildcard_colors) {
                     continue;
-                } else {
-                    // Create the mask of valid candidate tiles for the cell.
-                    let mut mask = BitVec::repeat(false, tile_set.tiles.len());
-                    for (k, tile_image) in tile_images.iter().enumerate() {
-                        // Check the centre colour.
-                        let tile_centre_col = tile_image.data.slice(s![1, 1, ..]);
-                        if tile_centre_col == init_col {
-                            mask.set(k, true);
+                }
+
+                let mut mask = BitVec::repeat(false, tile_set.tiles.len());
+                for (k, tile_image) in tile_images.iter().enumerate() {
+                    let mut valid = true;
+                    for (dy, dx) in NEIGHBORS.iter() {
+                        let ni = i as isize + dy;
+                        let nj = j as isize + dx;
+                        if ni < 0 || nj < 0 || ni >= rows as isize || nj >= cols as isize {
+                            continue;
+                        }
+                        // The tile image's center is at (1,1), so offset by (dy,dx).
+                        let tile_pixel =
+                            tile_image
+                                .data
+                                .slice(s![(1 + dy) as usize, (1 + dx) as usize, ..]);
+                        let init_pixel = init_image.data.slice(s![ni as usize, nj as usize, ..]);
+                        if !Self::is_wildcard(
+                            init_pixel.as_slice().unwrap().into(),
+                            wildcard_colors,
+                        ) && tile_pixel.as_slice().unwrap() != init_pixel.as_slice().unwrap()
+                        {
+                            valid = false;
+                            break;
                         }
                     }
-                    if mask.count_ones() == 0 {
-                        eprintln!("No candidate tile found for cell ({}, {})", i, j);
-                        return None;
+                    if valid {
+                        mask.set(k, true);
                     }
-                    states[(i, j)] = mask;
                 }
+                if mask.count_ones() == 0 {
+                    eprintln!("No candidate tile found for cell ({}, {})", i, j);
+                    return None;
+                }
+                states[(i, j)] = mask;
             }
         }
 
